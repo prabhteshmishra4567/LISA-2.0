@@ -65,20 +65,15 @@ node index.js
 
 ![Image](https://github.com/user-attachments/assets/62b50af3-2edb-480c-8dff-fc8d7e2d60f0)
 
+![Image](https://github.com/user-attachments/assets/822596c3-149c-4e1d-9271-b7eac71f5213)
+
+
 ---
 
 ## 📍 Project Structure
 
 ```
-LISA-2.0/
-🕛 Frontend/           # React Frontend (Vite)
-🕛 ├── src/
-🕛 └── index.html
-🕛 Backend/           # Node.js Backend
-🕛 ├── routes/
-🕛 ├── controllers/
-🕛 └── index.js
-🕛 database/         # MySQL Setup & Config
+![Image](https://github.com/user-attachments/assets/26ad141c-9ed6-451b-85f7-3789a6b2258e)
 ```
 
 ---
