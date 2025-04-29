@@ -71,10 +71,8 @@ node index.js
 ---
 
 ## 📍 Project Structure
-
-```
+ 
 ![Image](https://github.com/user-attachments/assets/26ad141c-9ed6-451b-85f7-3789a6b2258e)
-```
 
 ---
 
