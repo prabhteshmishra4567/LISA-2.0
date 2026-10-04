@@ -17,7 +17,7 @@ LISA helps you think through ideas, ask follow-up questions, research current in
 - Research mode uses Gemini's Google Search grounding and displays returned sources and Google Search suggestions. Search availability depends on the configured model and API account; Gemini decides when to use the search tool.
 - LISA Live switches the entire workspace into a focused, one-to-one voice conversation. It listens, sends the transcript, reads the answer aloud, and automatically listens for the next turn. When the browser's speech service is unavailable, LISA records up to 20 seconds and uses Gemini to transcribe it; tap the orb again when you finish speaking. English (US), English (India), and Hindi are supported. Microphone access requires permission and a secure origin such as HTTPS or localhost.
 - Everyday commands: `open YouTube`, `open Spotify`, `open Google`, `open GitHub`, `search for ...`, `time`, `date`, and `tell me a joke`. These work without an AI key. Browser actions return a link you can click; they do not launch native desktop applications.
-- Stop pending requests, retry failed questions, and receive clear configuration, quota, and network errors. Temporary Gemini network, capacity, and rate-limit failures are retried automatically with a short backoff.
+- Stop pending requests, retry failed questions, and receive clear configuration, quota, and network errors. Temporary Gemini network and capacity failures are retried automatically with a short backoff; exhausted quotas fail immediately with an actionable message.
 - GitHub CI for lint, builds, backend tests, browser tests, and dependency audits. Dependabot proposes weekly dependency and Actions updates.
 
 ## Run locally
@@ -34,7 +34,7 @@ Copy-Item .env.example .env
 npm start
 ```
 
-If you already have `.env`, keep it and update its settings instead of overwriting it. Create an API key in [Google AI Studio](https://aistudio.google.com/apikey). The model defaults to `gemini-flash-latest`; set `GEMINI_MODEL` to a specific available model ID to pin behavior. `GEMINI_TRANSCRIBE_MODEL` can optionally select a different model for recorded voice. API usage, including research and fallback transcription, is subject to Google's pricing and quotas. The [Google Gen AI SDK documentation](https://googleapis.github.io/js-genai/release_docs/index.html), [Gemini audio documentation](https://ai.google.dev/gemini-api/docs/audio), and [Google Search grounding documentation](https://ai.google.dev/gemini-api/docs/google-search) describe these calls.
+If you already have `.env`, keep it and update its settings instead of overwriting it. Create an API key in [Google AI Studio](https://aistudio.google.com/apikey). The example uses `gemini-3.5-flash-lite`, Google's high-volume, cost-efficient model; set `GEMINI_MODEL` to another available model ID when you need higher quality. `GEMINI_TRANSCRIBE_MODEL` can optionally select a different model for recorded voice. API usage, including research and fallback transcription, is subject to Google's pricing and quotas. The [Google Gen AI SDK documentation](https://googleapis.github.io/js-genai/release_docs/index.html), [Gemini audio documentation](https://ai.google.dev/gemini-api/docs/audio), and [Google Search grounding documentation](https://ai.google.dev/gemini-api/docs/google-search) describe these calls.
 
 In another terminal:
 

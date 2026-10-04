@@ -2,7 +2,7 @@ const { GoogleGenAI } = require('@google/genai');
 
 function retryable(error) {
   const status = Number(error?.status || error?.code);
-  return error?.name === 'TypeError' || [429, 500, 502, 503, 504].includes(status);
+  return error?.name === 'TypeError' || [500, 502, 503, 504].includes(status);
 }
 
 function pause(milliseconds, signal) {

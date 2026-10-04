@@ -219,6 +219,16 @@ test('the Gemini adapter retries temporary provider failures', async () => {
   assert.equal(result.answer, 'Recovered answer');
 });
 
+test('the Gemini adapter does not retry exhausted quota responses', async () => {
+  let attempts = 0;
+  const provider = createProvider({ retryDelay: 0, client: { models: { generateContent: async () => {
+    attempts++;
+    throw Object.assign(new Error('Quota exhausted'), { status: 429 });
+  } } } });
+  await assert.rejects(() => provider.generate({ question: 'hello', history: [], research: false, signal: new AbortController().signal }), { status: 429 });
+  assert.equal(attempts, 1);
+});
+
 test('empty or blocked model output is reported as an error', async () => {
   const provider = createProvider({ client: { models: { generateContent: async () => ({ text: '' }) } } });
   await assert.rejects(() => provider.generate({ question: 'hi', history: [], research: false }), { status: 422 });
