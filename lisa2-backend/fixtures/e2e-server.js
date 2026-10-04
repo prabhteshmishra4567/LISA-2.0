@@ -17,6 +17,9 @@ const provider = {
       searchSuggestions: research ? '<a target="_blank" href="https://google.com/search?q=test">Search suggestions</a>' : '',
     };
   },
+  async transcribe() {
+    return { transcript: 'Recorded fallback question' };
+  },
 };
 const port = Number(process.env.PORT || 5000);
 const server = createApp({ store, provider }).listen(port, '127.0.0.1');

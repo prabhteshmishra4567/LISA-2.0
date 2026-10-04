@@ -7,6 +7,19 @@ function createApp({ store, provider, origins = (process.env.ALLOWED_ORIGINS || 
   const app = express();
   const busy = new Set();
   const requests = new Map();
+  function takeRateSlot(req, res, message) {
+    const now = Date.now();
+    for (const [key, period] of requests) if (period.until <= now) requests.delete(key);
+    const key = req.ip;
+    const period = requests.get(key) || { count: 0, until: now + 60000 };
+    if (period.count >= rateLimit) {
+      res.setHeader('Retry-After', String(Math.ceil((period.until - now) / 1000)));
+      res.status(429).json({ error: message });
+      return false;
+    }
+    requests.set(key, { ...period, count: period.count + 1 });
+    return true;
+  }
   app.disable('x-powered-by');
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -43,6 +56,46 @@ function createApp({ store, provider, origins = (process.env.ALLOWED_ORIGINS || 
     store.remove(req.params.id, req.owner);
     res.status(204).end();
   });
+  app.post('/api/transcribe', express.raw({ type: () => true, limit: '5mb' }), async (req, res) => {
+    const mimeType = (req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+    const supportedTypes = new Set(['audio/webm', 'audio/ogg', 'audio/mp4', 'audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/aac']);
+    const language = typeof req.query.language === 'string' ? req.query.language : '';
+    if (!supportedTypes.has(mimeType)) return res.status(415).json({ error: 'Unsupported audio format. Record WebM, OGG, MP4, MP3, WAV, or AAC audio.' });
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: 'The audio recording is empty. Please try again.' });
+    if (language.length > 35 || (language && !/^[a-z]{2,3}(?:-[A-Z]{2})?$/.test(language))) return res.status(400).json({ error: 'Invalid voice language.' });
+    if (!provider.ready || typeof provider.transcribe !== 'function') return res.status(503).json({ error: 'Audio transcription is not configured. Check GEMINI_API_KEY and restart the backend.' });
+    if (!takeRateSlot(req, res, 'Too many voice requests. Please wait a minute.')) return;
+    const controller = new AbortController();
+    const disconnected = () => { if (!res.writableEnded) controller.abort(); };
+    res.on('close', disconnected);
+    const timeout = setTimeout(() => controller.abort(), 65000);
+    try {
+      const result = await provider.transcribe({ audio: req.body, mimeType, language, signal: controller.signal });
+      if (controller.signal.aborted) {
+        if (!res.destroyed) res.status(504).json({ error: 'Audio transcription timed out. Please try again.' });
+        return;
+      }
+      res.json(result);
+    } catch (error) {
+      if (res.destroyed) return;
+      const status = controller.signal.aborted ? 504 : Number(error.status);
+      const safeStatus = [400, 403, 404, 422, 429, 503, 504].includes(status) ? status : 502;
+      const errors = {
+        400: 'The AI provider rejected this recording. Please record it again.',
+        403: 'The AI provider rejected your credentials or permissions. Check GEMINI_API_KEY.',
+        404: 'The configured transcription model is unavailable. Check GEMINI_TRANSCRIBE_MODEL.',
+        422: 'No speech could be transcribed. Tap the microphone and try again.',
+        429: 'The AI provider quota was exceeded. Please wait and try again.',
+        503: 'Audio transcription is temporarily unavailable. Please try again.',
+        504: 'Audio transcription timed out. Please try again.',
+        502: 'Could not transcribe the recording. Please check the connection and try again.',
+      };
+      res.status(safeStatus).json({ error: errors[safeStatus] });
+    } finally {
+      clearTimeout(timeout);
+      res.off('close', disconnected);
+    }
+  });
   const ask = async (req, res) => {
     const { question, conversationId, research = false, timeZone = 'UTC' } = req.body || {};
     if (typeof question !== 'string' || !question.trim() || question.length > 12000) return res.status(400).json({ error: 'Question must contain 1–12,000 characters.' });
@@ -53,15 +106,7 @@ function createApp({ store, provider, origins = (process.env.ALLOWED_ORIGINS || 
     if (typeof timeZone !== 'string' || timeZone.length > 100) return res.status(400).json({ error: 'Invalid time zone.' });
     const localAnswer = localCommand(question, timeZone);
     if (!localAnswer && !provider.ready) return res.status(503).json({ error: 'AI is not configured. Add GEMINI_API_KEY to the backend .env file, then restart the backend.' });
-    const now = Date.now();
-    for (const [key, window] of requests) if (window.until <= now) requests.delete(key);
-    const key = req.ip;
-    const window = requests.get(key) || { count: 0, until: now + 60000 };
-    if (window.count >= rateLimit) {
-      res.setHeader('Retry-After', String(Math.ceil((window.until - now) / 1000)));
-      return res.status(429).json({ error: 'Too many questions. Please wait a minute.' });
-    }
-    requests.set(key, { ...window, count: window.count + 1 });
+    if (!takeRateSlot(req, res, 'Too many questions. Please wait a minute.')) return;
     if (!conversation) conversation = store.create(req.owner, question.trim().slice(0, 70));
     if (busy.has(conversation.id)) return res.status(409).json({ error: 'A response is already being generated for this conversation.' });
     busy.add(conversation.id);

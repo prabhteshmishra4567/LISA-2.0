@@ -22,9 +22,10 @@ async function fixture(t, options = {}) {
   t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); store.close(); });
   const owner = randomUUID();
   async function request(path, { body, headers, ...init } = {}) {
+    const raw = Buffer.isBuffer(body);
     const response = await fetch(`http://127.0.0.1:${server.address().port}${path}`, {
       ...init, headers: { 'Content-Type': 'application/json', 'X-Lisa-Client-Id': owner, ...headers },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      ...(body !== undefined ? { body: raw ? body : JSON.stringify(body) } : {}),
     });
     return { status: response.status, headers: response.headers, data: response.status === 204 ? null : await response.json() };
   }
@@ -87,6 +88,30 @@ test('missing AI configuration still allows persistent local commands', async t 
   assert.equal(local.status, 200);
   assert.match(local.data.answer, /https:\/\/www.youtube.com/);
   assert.equal((await request(`/api/conversations/${local.data.conversationId}`)).data.messages.length, 2);
+});
+
+test('recorded audio is validated and passed to the transcription provider', async t => {
+  let captured;
+  const provider = { ready: true, model: 'test', generate: async () => ({ answer: 'ok', sources: [] }), transcribe: async input => {
+    captured = input;
+    return { transcript: 'Hello from the recording' };
+  } };
+  const { request } = await fixture(t, { provider });
+  const result = await request('/api/transcribe?language=en-IN', { method: 'POST', body: Buffer.from('audio-data'), headers: { 'Content-Type': 'audio/webm;codecs=opus' } });
+  assert.equal(result.status, 200);
+  assert.equal(result.data.transcript, 'Hello from the recording');
+  assert.equal(captured.mimeType, 'audio/webm');
+  assert.equal(captured.language, 'en-IN');
+  assert.deepEqual(captured.audio, Buffer.from('audio-data'));
+  assert.equal((await request('/api/transcribe', { method: 'POST', body: Buffer.from('text'), headers: { 'Content-Type': 'text/plain' } })).status, 415);
+  assert.equal((await request('/api/transcribe?language=invalid-language', { method: 'POST', body: Buffer.from('audio'), headers: { 'Content-Type': 'audio/webm' } })).status, 400);
+});
+
+test('audio transcription requires an AI provider with transcription support', async t => {
+  const { request } = await fixture(t, { provider: { ready: false, model: 'none' } });
+  const result = await request('/api/transcribe', { method: 'POST', body: Buffer.from('audio'), headers: { 'Content-Type': 'audio/webm' } });
+  assert.equal(result.status, 503);
+  assert.doesNotMatch(result.data.error, /undefined|secret/i);
 });
 
 test('provider failures do not save partial turns or expose secrets, and retry remains possible', async t => {
@@ -164,6 +189,21 @@ test('the Gemini adapter supplies context and search configuration and filters u
   assert.equal(captured.contents[1].role, 'model');
   assert.equal(result.sources.length, 1);
   assert.equal(result.searchSuggestions, '<div>Search suggestions</div>');
+});
+
+test('the Gemini adapter transcribes inline audio without exposing extra model text', async () => {
+  let captured;
+  const provider = createProvider({ model: 'chat-model', transcribeModel: 'audio-model', client: { models: { generateContent: async input => {
+    captured = input;
+    return { text: '  Recorded question  ' };
+  } } } });
+  const signal = new AbortController().signal;
+  const result = await provider.transcribe({ audio: Buffer.from('sound'), mimeType: 'audio/webm', language: 'en-US', signal });
+  assert.equal(captured.model, 'audio-model');
+  assert.equal(captured.contents[0].parts[1].inlineData.mimeType, 'audio/webm');
+  assert.equal(captured.contents[0].parts[1].inlineData.data, Buffer.from('sound').toString('base64'));
+  assert.equal(captured.config.abortSignal, signal);
+  assert.deepEqual(result, { transcript: 'Recorded question' });
 });
 
 test('empty or blocked model output is reported as an error', async () => {

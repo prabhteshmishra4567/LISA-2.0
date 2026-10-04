@@ -8,10 +8,15 @@ if (!clientId || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a
 export async function api(path, { body, ...options } = {}) {
   let response;
   try {
+    const rawBody = body instanceof Blob || body instanceof ArrayBuffer;
     response = await fetch(`${base}/api${path}`, {
       ...options,
-      headers: { 'Content-Type': 'application/json', 'X-Lisa-Client-Id': clientId },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      headers: {
+        'Content-Type': rawBody ? (body.type || 'application/octet-stream') : 'application/json',
+        'X-Lisa-Client-Id': clientId,
+        ...options.headers,
+      },
+      ...(body !== undefined ? { body: rawBody ? body : JSON.stringify(body) } : {}),
     });
   } catch (error) {
     if (error.name === 'AbortError') throw error;

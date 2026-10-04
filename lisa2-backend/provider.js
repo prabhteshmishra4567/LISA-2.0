@@ -1,6 +1,6 @@
 const { GoogleGenAI } = require('@google/genai');
 
-function createProvider({ apiKey = process.env.GEMINI_API_KEY, model = process.env.GEMINI_MODEL || 'gemini-flash-latest', client } = {}) {
+function createProvider({ apiKey = process.env.GEMINI_API_KEY, model = process.env.GEMINI_MODEL || 'gemini-flash-latest', transcribeModel = process.env.GEMINI_TRANSCRIBE_MODEL || model, client } = {}) {
   const ai = client || (apiKey ? new GoogleGenAI({ apiKey }) : null);
   return {
     ready: Boolean(ai), model,
@@ -29,6 +29,23 @@ function createProvider({ apiKey = process.env.GEMINI_API_KEY, model = process.e
         return [{ title: web.title || web.uri, url: web.uri }];
       }).filter((source, index, all) => all.findIndex(item => item.url === source.url) === index);
       return { answer, sources, searchSuggestions: grounding?.searchEntryPoint?.renderedContent || '' };
+    },
+    async transcribe({ audio, mimeType, language, signal }) {
+      const response = await ai.models.generateContent({
+        model: transcribeModel,
+        contents: [{ role: 'user', parts: [
+          { text: `Transcribe the spoken words exactly${language ? ` in the ${language} locale` : ''}. Return only the transcript, without a label, notes, or Markdown.` },
+          { inlineData: { mimeType, data: audio.toString('base64') } },
+        ] }],
+        config: { maxOutputTokens: 2048, httpOptions: { timeout: 60000 }, abortSignal: signal },
+      });
+      const transcript = response.text?.trim();
+      if (!transcript) {
+        const error = new Error('The model returned no transcript.');
+        error.status = 422;
+        throw error;
+      }
+      return { transcript };
     },
   };
 }

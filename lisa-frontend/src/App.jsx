@@ -34,13 +34,15 @@ function App() {
   const [copied, setCopied] = useState(null);
   const [voiceMode, setVoiceMode] = useState(false);
   const [speaking, setSpeaking] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const generation = useRef(null);
   const selection = useRef(null);
   const sending = useRef(false);
   const end = useRef(null);
   const input = useRef(null);
   const voiceModeRef = useRef(false);
-  const voice = useVoice({ language, onTranscript: handleVoiceTranscript, onError: setNotice });
+  const transcription = useRef(null);
+  const voice = useVoice({ language, onTranscript: handleVoiceTranscript, onAudio: handleVoiceAudio, onError: setNotice });
   const current = conversations.find(item => item.id === activeId);
   const modalOpen = settings || Boolean(dialog);
 
@@ -93,7 +95,7 @@ function App() {
       finally { if (!controller.signal.aborted) setLoading(false); }
     }
     initialize();
-    return () => { controller.abort(); generation.current?.abort(); selection.current?.abort(); window.speechSynthesis?.cancel(); };
+    return () => { controller.abort(); generation.current?.abort(); selection.current?.abort(); transcription.current?.abort(); window.speechSynthesis?.cancel(); };
   }, []);
 
   function handleVoiceTranscript(text) {
@@ -101,8 +103,27 @@ function App() {
     else setDraft(text);
   }
 
+  async function handleVoiceAudio(audio) {
+    const controller = new AbortController();
+    transcription.current?.abort();
+    transcription.current = controller;
+    setTranscribing(true);
+    setNotice('');
+    try {
+      const result = await api(`/transcribe?language=${encodeURIComponent(language)}`, { method: 'POST', body: audio, signal: controller.signal });
+      if (controller.signal.aborted) return;
+      setTranscribing(false);
+      handleVoiceTranscript(result.transcript);
+    } catch (error) {
+      if (error.name !== 'AbortError') setNotice(error.message);
+    } finally {
+      if (transcription.current === controller) transcription.current = null;
+      setTranscribing(false);
+    }
+  }
+
   function enterVoiceMode() {
-    if (!voice.supported || busy || loading) return;
+    if (!voice.supported || busy || loading || transcribing) return;
     voiceModeRef.current = true;
     setVoiceMode(true);
     setSpeaking(false);
@@ -114,6 +135,9 @@ function App() {
   function leaveVoiceMode({ cancelResponse = false } = {}) {
     voiceModeRef.current = false;
     voice.stop();
+    transcription.current?.abort();
+    transcription.current = null;
+    setTranscribing(false);
     window.speechSynthesis?.cancel();
     setSpeaking(false);
     setVoiceMode(false);
@@ -123,6 +147,7 @@ function App() {
 
   function resumeVoice() {
     if (busy) return generation.current?.abort();
+    if (transcribing) return transcription.current?.abort();
     if (speaking) {
       window.speechSynthesis?.cancel();
       setSpeaking(false);
@@ -244,8 +269,8 @@ function App() {
   }
 
   if (voiceMode) {
-    const voiceStatus = busy ? (research ? 'Researching your question' : 'Thinking about that') : speaking ? 'Speaking' : voice.listening ? 'Listening' : 'Ready when you are';
-    const voiceHint = busy ? 'Tap stop if you want to interrupt' : speaking ? 'Tap the orb to interrupt' : voice.listening ? 'Go ahead, I’m listening' : 'Tap the orb to speak';
+    const voiceStatus = transcribing ? 'Transcribing your voice' : busy ? (research ? 'Researching your question' : 'Thinking about that') : speaking ? 'Speaking' : voice.recording ? 'Recording for Gemini' : voice.listening ? 'Listening' : 'Ready when you are';
+    const voiceHint = transcribing ? 'Turning your recording into text' : busy ? 'Tap stop if you want to interrupt' : speaking ? 'Tap the orb to interrupt' : voice.recording ? 'Tap the orb when you finish speaking' : voice.listening ? 'Go ahead, I’m listening' : voice.fallback ? 'Tap to record, then tap again when finished' : 'Tap the orb to speak';
     const recentMessages = messages.slice(-4);
     return (
       <main className="voice-live" aria-label="LISA Live voice conversation">
@@ -259,11 +284,11 @@ function App() {
         </header>
 
         <section className="voice-live-stage">
-          <div className={`voice-orb-wrap ${voice.listening ? 'is-listening' : ''} ${speaking ? 'is-speaking' : ''} ${busy ? 'is-thinking' : ''}`}>
+          <div className={`voice-orb-wrap ${voice.listening ? 'is-listening' : ''} ${speaking ? 'is-speaking' : ''} ${busy || transcribing ? 'is-thinking' : ''}`}>
             <span className="voice-ring ring-one" />
             <span className="voice-ring ring-two" />
-            <button className="voice-orb" onClick={resumeVoice} aria-label={busy ? 'Stop response' : voice.listening ? 'Mute microphone' : speaking ? 'Interrupt LISA' : 'Start listening'}>
-              {busy ? <Square size={28} fill="currentColor" /> : voice.listening ? <AudioLines size={42} /> : speaking ? <Sparkles size={42} /> : <Mic size={38} />}
+            <button className="voice-orb" onClick={resumeVoice} aria-label={busy ? 'Stop response' : transcribing ? 'Stop transcription' : voice.recording ? 'Finish recording' : voice.listening ? 'Mute microphone' : speaking ? 'Interrupt LISA' : 'Start listening'}>
+              {busy || transcribing ? <Square size={28} fill="currentColor" /> : voice.listening ? <AudioLines size={42} /> : speaking ? <Sparkles size={42} /> : <Mic size={38} />}
             </button>
           </div>
           <div className="voice-live-status" role="status"><span className={voice.listening ? 'live-dot' : ''} />{voiceStatus}</div>
@@ -281,7 +306,7 @@ function App() {
 
         <footer className="voice-live-controls">
           <button onClick={() => leaveVoiceMode()}><span><Keyboard size={20} /></span><small>Keyboard</small></button>
-          <button className={`voice-control-main ${voice.listening ? 'active' : ''}`} onClick={resumeVoice} disabled={busy}><span>{voice.listening ? <MicOff size={24} /> : <Mic size={24} />}</span><small>{voice.listening ? 'Mute' : 'Speak'}</small></button>
+          <button className={`voice-control-main ${voice.listening ? 'active' : ''}`} onClick={resumeVoice} disabled={busy || transcribing}><span>{voice.recording ? <Square size={22} fill="currentColor" /> : voice.listening ? <MicOff size={24} /> : <Mic size={24} />}</span><small>{voice.recording ? 'Finish' : voice.listening ? 'Mute' : 'Speak'}</small></button>
           <button onClick={() => leaveVoiceMode({ cancelResponse: true })}><span className="hang-up"><PhoneOff size={20} /></span><small>End</small></button>
         </footer>
         <p className="voice-disclaimer">LISA can make mistakes. Check important information.</p>

@@ -56,7 +56,12 @@ test('failed and stopped requests restore the draft without saving duplicate mes
 });
 
 test('local actions use safe links and voice gracefully falls back when unavailable', async ({ page }) => {
-  await page.addInitScript(() => { window.SpeechRecognition = undefined; window.webkitSpeechRecognition = undefined; });
+  await page.addInitScript(() => {
+    window.SpeechRecognition = undefined;
+    window.webkitSpeechRecognition = undefined;
+    window.MediaRecorder = undefined;
+    Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: undefined });
+  });
   await page.goto('/');
   await expect(page.getByText('Connected', { exact: true })).toBeVisible();
   await expect(page.getByLabel('Start voice conversation')).toBeDisabled();
@@ -67,6 +72,38 @@ test('local actions use safe links and voice gracefully falls back when unavaila
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+});
+
+test('voice records and asks Gemini to transcribe when browser recognition fails', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.SpeechSynthesisUtterance = undefined;
+    Object.defineProperty(window, 'speechSynthesis', { configurable: true, value: undefined });
+    window.SpeechRecognition = class {
+      start() { setTimeout(() => this.onerror?.({ error: 'network' }), 0); }
+      abort() {}
+    };
+    Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: {
+      getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }),
+    } });
+    window.MediaRecorder = class {
+      static isTypeSupported() { return true; }
+      constructor(_stream, options) { this.mimeType = options?.mimeType || 'audio/webm'; this.state = 'inactive'; }
+      start() { this.state = 'recording'; }
+      stop() {
+        this.state = 'inactive';
+        this.ondataavailable?.({ data: new Blob(['recorded audio'], { type: this.mimeType }) });
+        this.onstop?.();
+      }
+    };
+  });
+  await page.goto('/');
+  await expect(page.getByText('Connected', { exact: true })).toBeVisible();
+  await page.getByLabel('Start voice conversation').click();
+  await expect(page.getByText('Recording for Gemini')).toBeVisible();
+  await expect(page.locator('.voice-live-hint')).toContainText('Tap the orb when you finish');
+  await page.getByRole('button', { name: 'Finish', exact: true }).click();
+  await expect(page.locator('.voice-turn.user')).toContainText('Recorded fallback question');
+  await expect(page.locator('.voice-turn.assistant')).toContainText('Test answer');
 });
 
 test('voice mode switches the whole interface, sends speech, answers aloud and returns to chat', async ({ page }) => {

@@ -14,13 +14,94 @@ export function speak(text, language = 'en-US', { onStart, onEnd, onError } = {}
   return true;
 }
 
-export function useVoice({ language, onTranscript, onError }) {
-  const [listening, setListening] = useState(false);
-  const listeningRef = useRef(false);
+function recorderMimeType() {
+  const choices = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
+  return choices.find(type => window.MediaRecorder?.isTypeSupported?.(type)) || '';
+}
+
+export function useVoice({ language, onTranscript, onAudio, onError }) {
+  const nativeSupported = Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
+  const recorderSupported = Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+  const [nativeListening, setNativeListening] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [fallback, setFallback] = useState(!nativeSupported && recorderSupported);
   const recognition = useRef(null);
-  const callbacks = useRef({ onTranscript, onError });
-  const supported = Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
-  useEffect(() => { callbacks.current = { onTranscript, onError }; }, [onTranscript, onError]);
+  const recorder = useRef(null);
+  const stream = useRef(null);
+  const chunks = useRef([]);
+  const recordTimer = useRef(null);
+  const active = useRef(false);
+  const recordingRef = useRef(false);
+  const recorderSupportedRef = useRef(recorderSupported);
+  const fallbackRef = useRef(!nativeSupported && recorderSupported);
+  const startRecorderRef = useRef(null);
+  const callbacks = useRef({ onTranscript, onAudio, onError });
+
+  useEffect(() => { callbacks.current = { onTranscript, onAudio, onError }; }, [onTranscript, onAudio, onError]);
+
+  function releaseStream() {
+    stream.current?.getTracks().forEach(track => track.stop());
+    stream.current = null;
+  }
+
+  function finishRecording({ discard = false } = {}) {
+    active.current = false;
+    clearTimeout(recordTimer.current);
+    const instance = recorder.current;
+    if (!instance || instance.state === 'inactive') {
+      releaseStream();
+      recordingRef.current = false;
+      setRecording(false);
+      return;
+    }
+    instance._lisaDiscard = discard;
+    instance.stop();
+  }
+
+  async function startRecorder() {
+    if (!recorderSupported || recordingRef.current) {
+      if (!recorderSupported) callbacks.current.onError('This browser cannot record audio. You can still type your message.');
+      return;
+    }
+    active.current = true;
+    window.speechSynthesis?.cancel();
+    try {
+      const mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      if (!active.current) {
+        mediaStream.getTracks().forEach(track => track.stop());
+        return;
+      }
+      stream.current = mediaStream;
+      chunks.current = [];
+      const mimeType = recorderMimeType();
+      const instance = new MediaRecorder(mediaStream, mimeType ? { mimeType } : undefined);
+      recorder.current = instance;
+      instance.ondataavailable = event => { if (event.data?.size) chunks.current.push(event.data); };
+      instance.onerror = () => callbacks.current.onError('Audio recording failed. Check microphone access and try again.');
+      instance.onstop = () => {
+        clearTimeout(recordTimer.current);
+        releaseStream();
+        recordingRef.current = false;
+        setRecording(false);
+        recorder.current = null;
+        const audio = new Blob(chunks.current, { type: instance.mimeType || mimeType || 'audio/webm' });
+        chunks.current = [];
+        if (!instance._lisaDiscard && audio.size) callbacks.current.onAudio(audio);
+      };
+      instance.start();
+      recordingRef.current = true;
+      setRecording(true);
+      recordTimer.current = setTimeout(() => finishRecording(), 20000);
+    } catch (error) {
+      active.current = false;
+      releaseStream();
+      callbacks.current.onError(error?.name === 'NotAllowedError'
+        ? 'Microphone permission was denied. Allow microphone access in your browser settings.'
+        : 'Could not start audio recording. Check your microphone and try again.');
+    }
+  }
+  startRecorderRef.current = startRecorder;
+
   useEffect(() => {
     const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!Recognition) return;
@@ -29,14 +110,28 @@ export function useVoice({ language, onTranscript, onError }) {
     instance.continuous = false;
     instance.interimResults = false;
     instance.onresult = event => callbacks.current.onTranscript(event.results[0][0].transcript);
-    instance.onend = () => { listeningRef.current = false; setListening(false); };
+    instance.onend = () => { setNativeListening(false); };
     instance.onerror = event => {
-      listeningRef.current = false;
-      setListening(false);
+      setNativeListening(false);
       if (event.error === 'aborted') return;
-      callbacks.current.onError(event.error === 'not-allowed'
-        ? 'Microphone permission was denied. Allow microphone access in your browser settings.'
-        : event.error === 'no-speech' ? 'No speech detected. Try the microphone again.' : 'Voice recognition is unavailable. You can still type your message.');
+      if (event.error === 'not-allowed' || event.error === 'audio-capture') {
+        callbacks.current.onError(event.error === 'not-allowed'
+          ? 'Microphone permission was denied. Allow microphone access in your browser settings.'
+          : 'No working microphone was found. Check your audio input and try again.');
+        return;
+      }
+      if (event.error === 'no-speech') {
+        callbacks.current.onError('No speech detected. Tap the microphone and try again.');
+        return;
+      }
+      if (recorderSupportedRef.current) {
+        fallbackRef.current = true;
+        setFallback(true);
+        callbacks.current.onError('Browser speech service unavailable. Gemini recording is active—tap the orb when you finish.');
+        startRecorderRef.current();
+      } else {
+        callbacks.current.onError('Voice recognition is unavailable. You can still type your message.');
+      }
     };
     recognition.current = instance;
     return () => {
@@ -45,14 +140,52 @@ export function useVoice({ language, onTranscript, onError }) {
       recognition.current = null;
     };
   }, [language]);
-  function stop() { recognition.current?.abort(); listeningRef.current = false; setListening(false); }
-  function start() {
-    if (listeningRef.current) return;
-    if (!recognition.current) return callbacks.current.onError('This browser does not support voice recognition. Try Chrome or Edge.');
-    window.speechSynthesis?.cancel();
-    try { recognition.current.start(); listeningRef.current = true; setListening(true); }
-    catch { callbacks.current.onError('The microphone is already starting. Please try again.'); }
+
+  useEffect(() => () => {
+    active.current = false;
+    clearTimeout(recordTimer.current);
+    const instance = recorder.current;
+    if (instance && instance.state !== 'inactive') {
+      instance._lisaDiscard = true;
+      instance.stop();
+    }
+    releaseStream();
+  }, []);
+
+  function stop({ discard = true } = {}) {
+    active.current = false;
+    recognition.current?.abort();
+    setNativeListening(false);
+    if (recordingRef.current) finishRecording({ discard });
   }
-  function toggle() { if (listening) stop(); else start(); }
-  return { supported, listening, start, toggle, stop };
+
+  function start() {
+    if (nativeListening || recordingRef.current) return;
+    active.current = true;
+    window.speechSynthesis?.cancel();
+    if (fallbackRef.current || !recognition.current) return startRecorder();
+    try {
+      recognition.current.start();
+      setNativeListening(true);
+    } catch {
+      active.current = false;
+      callbacks.current.onError('The microphone is already starting. Please try again.');
+    }
+  }
+
+  function toggle() {
+    if (recordingRef.current) finishRecording();
+    else if (nativeListening) stop();
+    else start();
+  }
+
+  return {
+    supported: nativeSupported || recorderSupported,
+    listening: nativeListening || recording,
+    recording,
+    fallback,
+    start,
+    toggle,
+    stop,
+  };
 }
