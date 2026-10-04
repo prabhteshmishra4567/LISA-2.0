@@ -1,0 +1,31 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /lisa-frontend
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: Asia/Kolkata
+    open-pull-requests-limit: 5
+    groups:
+      compatible-updates:
+        update-types: [minor, patch]
+  - package-ecosystem: npm
+    directory: /lisa2-backend
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: Asia/Kolkata
+    open-pull-requests-limit: 5
+    groups:
+      compatible-updates:
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']

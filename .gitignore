@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.npm-cache/
+.playwright-browsers/
+.env
+.env.*
+!.env.example
+*.db
+*.db-*
+*.sqlite*
+lisa2-backend/lisa_ai(backend)
+*.log
+test-results/
+playwright-report/
+.DS_Store
