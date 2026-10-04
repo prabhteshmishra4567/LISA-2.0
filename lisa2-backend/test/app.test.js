@@ -195,7 +195,7 @@ test('the Gemini adapter transcribes inline audio without exposing extra model t
   let captured;
   const provider = createProvider({ model: 'chat-model', transcribeModel: 'audio-model', client: { models: { generateContent: async input => {
     captured = input;
-    return { text: '  Recorded question  ' };
+    return { text: '{"transcript":"Recorded question"}' };
   } } } });
   const signal = new AbortController().signal;
   const result = await provider.transcribe({ audio: Buffer.from('sound'), mimeType: 'audio/webm', language: 'en-US', signal });
@@ -203,7 +203,20 @@ test('the Gemini adapter transcribes inline audio without exposing extra model t
   assert.equal(captured.contents[0].parts[1].inlineData.mimeType, 'audio/webm');
   assert.equal(captured.contents[0].parts[1].inlineData.data, Buffer.from('sound').toString('base64'));
   assert.equal(captured.config.abortSignal, signal);
+  assert.equal(captured.config.responseMimeType, 'application/json');
   assert.deepEqual(result, { transcript: 'Recorded question' });
+});
+
+test('the Gemini adapter retries temporary provider failures', async () => {
+  let attempts = 0;
+  const provider = createProvider({ retryDelay: 0, client: { models: { generateContent: async () => {
+    attempts++;
+    if (attempts < 3) throw Object.assign(new Error('Temporarily unavailable'), { status: 503 });
+    return { text: 'Recovered answer' };
+  } } } });
+  const result = await provider.generate({ question: 'hello', history: [], research: false, signal: new AbortController().signal });
+  assert.equal(attempts, 3);
+  assert.equal(result.answer, 'Recovered answer');
 });
 
 test('empty or blocked model output is reported as an error', async () => {
