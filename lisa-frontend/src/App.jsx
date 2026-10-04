@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowUp, BookOpen, Check, ChevronDown, Code2, Copy, Download, Globe2, Menu, MessageSquare, Mic, Moon, Plus, Search, Settings2, Sparkles, Square, Sun, Trash2, Volume2, X, Pencil, Zap } from 'lucide-react';
+import { ArrowUp, AudioLines, BookOpen, Check, ChevronDown, Code2, Copy, Download, Globe2, Keyboard, Menu, MessageSquare, Mic, MicOff, Moon, PhoneOff, Plus, Search, Settings2, Sparkles, Square, Sun, Trash2, Volume2, X, Pencil, Zap } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { api } from './api';
@@ -32,12 +32,15 @@ function App() {
   const [sidebar, setSidebar] = useState(false);
   const [dialog, setDialog] = useState(null);
   const [copied, setCopied] = useState(null);
+  const [voiceMode, setVoiceMode] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
   const generation = useRef(null);
   const selection = useRef(null);
   const sending = useRef(false);
   const end = useRef(null);
   const input = useRef(null);
-  const voice = useVoice({ language, onTranscript: text => setDraft(text), onError: setNotice });
+  const voiceModeRef = useRef(false);
+  const voice = useVoice({ language, onTranscript: handleVoiceTranscript, onError: setNotice });
   const current = conversations.find(item => item.id === activeId);
   const modalOpen = settings || Boolean(dialog);
 
@@ -93,6 +96,40 @@ function App() {
     return () => { controller.abort(); generation.current?.abort(); selection.current?.abort(); window.speechSynthesis?.cancel(); };
   }, []);
 
+  function handleVoiceTranscript(text) {
+    if (voiceModeRef.current) send(undefined, text);
+    else setDraft(text);
+  }
+
+  function enterVoiceMode() {
+    if (!voice.supported || busy || loading) return;
+    voiceModeRef.current = true;
+    setVoiceMode(true);
+    setSpeaking(false);
+    setNotice('');
+    window.speechSynthesis?.cancel();
+    voice.start();
+  }
+
+  function leaveVoiceMode({ cancelResponse = false } = {}) {
+    voiceModeRef.current = false;
+    voice.stop();
+    window.speechSynthesis?.cancel();
+    setSpeaking(false);
+    setVoiceMode(false);
+    if (cancelResponse) generation.current?.abort();
+    setTimeout(() => input.current?.focus(), 0);
+  }
+
+  function resumeVoice() {
+    if (busy) return generation.current?.abort();
+    if (speaking) {
+      window.speechSynthesis?.cancel();
+      setSpeaking(false);
+    }
+    voice.toggle();
+  }
+
   async function reconnect() {
     setLoading(true);
     try {
@@ -124,10 +161,11 @@ function App() {
     input.current?.focus();
   }
 
-  async function send(event) {
+  async function send(event, spokenQuestion) {
     event?.preventDefault();
-    const question = draft.trim();
+    const question = (spokenQuestion ?? draft).trim();
     if (!question || sending.current || loading) return;
+    const fromVoice = spokenQuestion !== undefined && voiceModeRef.current;
     sending.current = true; setBusy(true); setNotice(''); voice.stop();
     const controller = new AbortController();
     generation.current = controller;
@@ -146,15 +184,32 @@ function App() {
         body: { question, conversationId: id, research, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
       });
       setMessages(previous => [...previous.filter(message => message.id !== optimisticId), ...response.messages]);
-      if (readAloud) speak(response.answer, language);
+      if (fromVoice && voiceModeRef.current) {
+        setSpeaking(true);
+        const started = speak(response.answer, language, {
+          onStart: () => setSpeaking(true),
+          onEnd: () => {
+            setSpeaking(false);
+            if (voiceModeRef.current) voice.start();
+          },
+          onError: () => {
+            setSpeaking(false);
+            if (voiceModeRef.current) setNotice('I could not play the answer aloud. Tap the microphone to continue.');
+          },
+        });
+        if (!started) {
+          setSpeaking(false);
+          setNotice('Speech playback is unavailable in this browser. You can read the answer below.');
+        }
+      } else if (readAloud) speak(response.answer, language);
       api('/conversations').then(setConversations).catch(error => setNotice(error.message));
     } catch (error) {
       setMessages(previous => previous.filter(message => message.id !== optimisticId));
-      setDraft(question);
-      setNotice(error.name === 'AbortError' ? 'Response stopped. Your message is ready to try again.' : error.message);
+      if (!fromVoice) setDraft(question);
+      setNotice(error.name === 'AbortError' ? (fromVoice ? 'Response stopped. Tap the microphone when you’re ready.' : 'Response stopped. Your message is ready to try again.') : error.message);
     } finally {
       sending.current = false; setBusy(false); generation.current = null;
-      input.current?.focus();
+      if (!fromVoice) input.current?.focus();
     }
   }
 
@@ -186,6 +241,52 @@ function App() {
     const url = URL.createObjectURL(new Blob([text], { type: 'text/markdown;charset=utf-8' }));
     const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'lisa-conversation.md'; anchor.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  if (voiceMode) {
+    const voiceStatus = busy ? (research ? 'Researching your question' : 'Thinking about that') : speaking ? 'Speaking' : voice.listening ? 'Listening' : 'Ready when you are';
+    const voiceHint = busy ? 'Tap stop if you want to interrupt' : speaking ? 'Tap the orb to interrupt' : voice.listening ? 'Go ahead, I’m listening' : 'Tap the orb to speak';
+    const recentMessages = messages.slice(-4);
+    return (
+      <main className="voice-live" aria-label="LISA Live voice conversation">
+        <header className="voice-live-header">
+          <div className="voice-live-brand"><span className="brand-mark"><Sparkles size={21} /></span><span><strong>LISA Live</strong><small>One-to-one voice conversation</small></span></div>
+          <div className="voice-live-header-actions">
+            {research && <span className="voice-research"><Globe2 size={13} /> Research on</span>}
+            <button className="voice-header-button" onClick={() => leaveVoiceMode()}><Keyboard size={17} /> Switch to chat</button>
+            <button className="voice-end-button" onClick={() => leaveVoiceMode({ cancelResponse: true })}><PhoneOff size={17} /> End</button>
+          </div>
+        </header>
+
+        <section className="voice-live-stage">
+          <div className={`voice-orb-wrap ${voice.listening ? 'is-listening' : ''} ${speaking ? 'is-speaking' : ''} ${busy ? 'is-thinking' : ''}`}>
+            <span className="voice-ring ring-one" />
+            <span className="voice-ring ring-two" />
+            <button className="voice-orb" onClick={resumeVoice} aria-label={busy ? 'Stop response' : voice.listening ? 'Mute microphone' : speaking ? 'Interrupt LISA' : 'Start listening'}>
+              {busy ? <Square size={28} fill="currentColor" /> : voice.listening ? <AudioLines size={42} /> : speaking ? <Sparkles size={42} /> : <Mic size={38} />}
+            </button>
+          </div>
+          <div className="voice-live-status" role="status"><span className={voice.listening ? 'live-dot' : ''} />{voiceStatus}</div>
+          <p className="voice-live-hint">{voiceHint}</p>
+
+          <div className="voice-live-conversation" aria-live="polite">
+            {!recentMessages.length && <p className="voice-empty">Ask me anything. I’ll listen, answer aloud, and stay ready for your next question.</p>}
+            {recentMessages.map(message => <article className={`voice-turn ${message.role}`} key={message.id}>
+              <span>{message.role === 'assistant' ? 'LISA' : 'YOU'}</span>
+              <p>{message.content.replace(/[*#`]/g, '').slice(0, 420)}{message.content.length > 420 ? '…' : ''}</p>
+            </article>)}
+          </div>
+          {notice && <div className="voice-notice"><span>{notice}</span><button className="icon-button" aria-label="Dismiss message" onClick={() => setNotice('')}><X size={15} /></button></div>}
+        </section>
+
+        <footer className="voice-live-controls">
+          <button onClick={() => leaveVoiceMode()}><span><Keyboard size={20} /></span><small>Keyboard</small></button>
+          <button className={`voice-control-main ${voice.listening ? 'active' : ''}`} onClick={resumeVoice} disabled={busy}><span>{voice.listening ? <MicOff size={24} /> : <Mic size={24} />}</span><small>{voice.listening ? 'Mute' : 'Speak'}</small></button>
+          <button onClick={() => leaveVoiceMode({ cancelResponse: true })}><span className="hang-up"><PhoneOff size={20} /></span><small>End</small></button>
+        </footer>
+        <p className="voice-disclaimer">LISA can make mistakes. Check important information.</p>
+      </main>
+    );
   }
 
   return (
@@ -246,7 +347,7 @@ function App() {
           <form className={`composer ${voice.listening ? 'listening' : ''}`} onSubmit={send}>
             <label className="sr-only" htmlFor="message">Message LISA</label>
             <textarea ref={input} id="message" value={draft} onChange={event => setDraft(event.target.value)} placeholder={voice.listening ? 'Listening…' : 'Ask a question, share an idea, or try “open YouTube”…'} rows={2} maxLength={12000} disabled={busy || loading} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); send(); } }} />
-            <div className="composer-bottom"><div className="composer-tools"><button type="button" className={`research-button ${research ? 'active' : ''}`} aria-pressed={research} onClick={() => setResearch(!research)} disabled={busy}><Globe2 size={15} /> Research</button><span className="composer-divider" /><button type="button" className={`icon-button mic ${voice.listening ? 'active' : ''}`} aria-label={voice.listening ? 'Stop microphone' : 'Start voice input'} title={voice.supported ? 'Voice input' : 'Voice input is unavailable in this browser'} aria-pressed={voice.listening} onClick={voice.toggle} disabled={busy || loading || !voice.supported}><Mic size={18} /></button></div><div className="send-tools"><span>{voice.listening ? 'Listening to you' : 'Enter to send'}</span>{busy ? <button className="send-button" type="button" aria-label="Stop response" onClick={() => generation.current?.abort()}><Square size={15} fill="currentColor" /></button> : <button className="send-button" type="submit" aria-label="Send message" disabled={!draft.trim() || loading}><ArrowUp size={20} /></button>}</div></div>
+            <div className="composer-bottom"><div className="composer-tools"><button type="button" className={`research-button ${research ? 'active' : ''}`} aria-pressed={research} onClick={() => setResearch(!research)} disabled={busy}><Globe2 size={15} /> Research</button><span className="composer-divider" /><button type="button" className="icon-button mic" aria-label="Start voice conversation" title={voice.supported ? 'Start LISA Live' : 'Voice conversations are unavailable in this browser'} onClick={enterVoiceMode} disabled={busy || loading || !voice.supported}><Mic size={18} /></button></div><div className="send-tools"><span>Enter to send</span>{busy ? <button className="send-button" type="button" aria-label="Stop response" onClick={() => generation.current?.abort()}><Square size={15} fill="currentColor" /></button> : <button className="send-button" type="submit" aria-label="Send message" disabled={!draft.trim() || loading}><ArrowUp size={20} /></button>}</div></div>
           </form>
           <div className="composer-caption"><span>LISA can make mistakes. Check important information.</span><span>{research ? 'Web research enabled' : 'Powered by Gemini'}</span></div>
         </div>

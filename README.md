@@ -15,7 +15,7 @@ LISA helps you think through ideas, ask follow-up questions, research current in
 - Follow-up memory: the last 20 complete turns, within a 48,000-character context budget, are sent to Gemini.
 - Markdown answers with code blocks, tables, safe links, copy controls, and optional read-aloud.
 - Research mode uses Gemini's Google Search grounding and displays returned sources and Google Search suggestions. Search availability depends on the configured model and API account; Gemini decides when to use the search tool.
-- Voice dictation with English (US), English (India), and Hindi preferences. Speech is placed in the composer for review before sending. Voice recognition depends on browser support and microphone permission; typed chat works independently.
+- LISA Live switches the entire workspace into a focused, one-to-one voice conversation. It listens, sends the transcript, reads the answer aloud, and automatically listens for the next turn. English (US), English (India), and Hindi are supported; availability depends on browser speech support and microphone permission.
 - Everyday commands: `open YouTube`, `open Spotify`, `open Google`, `open GitHub`, `search for ...`, `time`, `date`, and `tell me a joke`. These work without an AI key. Browser actions return a link you can click; they do not launch native desktop applications.
 - Stop pending requests, retry failed questions, and receive clear configuration, quota, and network errors.
 - GitHub CI for lint, builds, backend tests, browser tests, and dependency audits. Dependabot proposes weekly dependency and Actions updates.

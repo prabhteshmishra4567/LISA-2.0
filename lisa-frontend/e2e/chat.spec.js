@@ -59,7 +59,7 @@ test('local actions use safe links and voice gracefully falls back when unavaila
   await page.addInitScript(() => { window.SpeechRecognition = undefined; window.webkitSpeechRecognition = undefined; });
   await page.goto('/');
   await expect(page.getByText('Connected', { exact: true })).toBeVisible();
-  await expect(page.getByLabel('Start voice input')).toBeDisabled();
+  await expect(page.getByLabel('Start voice conversation')).toBeDisabled();
   await send(page, 'open youtube');
   await expect(page.getByRole('link', { name: 'Open youtube' })).toHaveAttribute('href', 'https://www.youtube.com');
   await expect(page.getByRole('link', { name: 'Open youtube' })).toHaveAttribute('rel', 'noopener noreferrer');
@@ -69,23 +69,36 @@ test('local actions use safe links and voice gracefully falls back when unavaila
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
 });
 
-test('voice transcript uses the latest selected language and fills the draft', async ({ page }) => {
+test('voice mode switches the whole interface, sends speech, answers aloud and returns to chat', async ({ page }) => {
   await page.addInitScript(() => {
     window.SpeechRecognition = class {
       start() {
+        if (this.sent) return setTimeout(() => this.onend?.(), 0);
+        this.sent = true;
         this.onresult({ results: [[{ transcript: this.lang === 'hi-IN' ? 'नमस्ते लिसा' : 'Hello LISA' }]] });
         setTimeout(() => this.onend?.(), 0);
       }
       abort() {}
     };
+    window.SpeechSynthesisUtterance = class { constructor(text) { this.text = text; } };
+    Object.defineProperty(window, 'speechSynthesis', { configurable: true, value: {
+      cancel() {}, getVoices() { return []; }, speak(utterance) {
+        setTimeout(() => utterance.onstart?.(), 0);
+        setTimeout(() => utterance.onend?.(), 20);
+      },
+    } });
   });
   await page.goto('/');
   await expect(page.getByText('Connected', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: /Preferences/ }).click();
   await page.getByLabel('Voice language').selectOption('hi-IN');
   await page.getByLabel('Close preferences').click();
-  await page.getByLabel('Start voice input').click();
-  await expect(page.getByLabel('Message LISA')).toHaveValue('नमस्ते लिसा');
+  await page.getByLabel('Start voice conversation').click();
+  await expect(page.getByText('LISA Live', { exact: true })).toBeVisible();
+  await expect(page.locator('.voice-turn.user')).toContainText('नमस्ते लिसा');
+  await expect(page.locator('.voice-turn.assistant')).toContainText('Test answer');
+  await page.getByRole('button', { name: 'Switch to chat' }).click();
+  await expect(page.getByLabel('Message LISA')).toBeVisible();
 });
 
 test('mobile navigation and composer fit the screen', async ({ page }) => {
